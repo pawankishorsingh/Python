@@ -1,0 +1,75 @@
+import ast, re
+
+TRANSLATION = {
+        "true": True,
+        "false": False,
+        "null": None,
+    }
+
+result_dict = { }
+
+class ParseException(Exception):
+    def __init__(self, token, line):
+        self.token = token
+        self.line = line
+    def __str__(self):
+        return "ParseException at line %d: invalid token %s" % (self.line, self.token)
+
+class GroovyConfigSlurper:
+    def __init__(self, source, rce):
+        self.source = source
+        self.rce= rce
+
+    def parse(self):
+        comment = False
+        buffer_prev = ''
+        buffer = ''
+        key_prev = ''
+        key = ''
+        all_lines = self.source.readlines()
+        for line in all_lines:
+        	if line.startswith('//') or len(line)<2: continue
+        	if '//' in line and not 'https://' in line : line=line.split('//')[0] #More such exclusion checks can also be added in future like ftp:// etc
+        	if '/*' in line and not re.match('\w+/*', line): comment = True
+        	if '*/' in line: 
+        		comment = False
+        		continue
+        	if not comment:
+        		#print "considering %s" %line.strip()
+        		if '=' in line:
+        			key_prev = key
+        			key = line.split('=')[0].strip()
+        			buffer_prev = buffer
+        			buffer = line.split('=')[1].strip()
+        			#print "buffer reset for line: %s" %line
+        		if not re.match("^[a-zA-Z]", line):
+        			buffer = buffer + line.strip()
+        			#print "buffer=%s" %buffer
+        		else:
+        			value = buffer_prev
+        			if len(buffer_prev) <2:
+        				continue
+        			#print "\nBEFORE: %s: %s" %(key_prev,value)
+        			if value.startswith('[') and value.endswith(']'):
+        				if len(value[1:][:-1])>3: #skip [: ]
+        					if not ':' in value[1:][:-1]: #For slackRecipientsSuccess : ["#tailwind-ci-automation"]
+        						value = ast.literal_eval(value)
+        					else: 
+							try: #dict havng lists e.g. requiredIncludes : ["win":['<somevalue>'], "mac":['some_value>']]
+								value = ast.literal_eval('{' + value[1:][:-1] + '}')
+							except: #dict having dict e.g. setEnviroinmentVariables : ["linux":["LD_LIBRARY_PATH":"<somepath>"]]
+								value = ast.literal_eval('{' + value[1:][:-1].replace('[', '{').replace(']', '}') + '}')
+							for k,v in value.items():	
+								v = ast.literal_eval(v) if '[' in v else v
+								#print '\t %s' %type(v)
+        			result_dict[key_prev] = value
+        			#print "AFTER: %s: %s" %(key_prev,value)
+	for k,v in result_dict.items():
+		print "%s: %s" %(k,v)
+
+	return result_dict
+#-----------------------------------------------------------------------------
+if __name__ == '__main__':
+	with open('Jenkinsfile') as f:
+		print GroovyConfigSlurper(f, None).parse()
+#-----------------------------------------------------------------------------
